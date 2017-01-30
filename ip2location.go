@@ -3,6 +3,7 @@ package ip2location
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -35,12 +36,11 @@ const (
 	usagetype          uint32 = 0x80000
 
 	all uint32 = countryshort | countrylong | region | city | isp | latitude | longitude | domain | zipcode | timezone | netspeed | iddcode | areacode | weatherstationcode | weatherstationname | mcc | mnc | mobilebrand | elevation | usagetype
-
-	invalid_address string = "Invalid IP address."
-	not_supported   string = "This parameter is unavailable for selected data file. Please upgrade the data file."
 )
 
 var (
+	ErrInvalidAddress = errors.New("Invalid IP address.")
+
 	countryPosition            = [25]uint8{0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
 	regionPosition             = [25]uint8{0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}
 	cityPosition               = [25]uint8{0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4}
@@ -155,6 +155,7 @@ type Record struct {
 func Open(dbPath string) (*DB, error) {
 	maxIpv6Range.SetString("340282366920938463463374607431768211455", 10)
 
+	var err error
 	f, err := os.Open(dbPath)
 	if err != nil {
 		return nil, err
@@ -165,17 +166,50 @@ func Open(dbPath string) (*DB, error) {
 		meta: &dbMeta{},
 	}
 
-	db.meta.databaseType = db.readUint8(1)
-	db.meta.databesColumn = db.readUint8(2)
-	db.meta.databaseYear = db.readUint8(3)
-	db.meta.databaseMonth = db.readUint8(4)
-	db.meta.databaseDay = db.readUint8(5)
-	db.meta.ipv4DatabaseCount = db.readUint32(6)
-	db.meta.ipv4DatabaseAddr = db.readUint32(10)
-	db.meta.ipv6DatabaseCount = db.readUint32(14)
-	db.meta.ipv6DatabaseAddr = db.readUint32(18)
-	db.meta.ipv4IndexBaseAddr = db.readUint32(22)
-	db.meta.ipv6IndexBaseAddr = db.readUint32(26)
+	db.meta.databaseType, err = db.readUint8(1)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.databesColumn, err = db.readUint8(2)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.databaseYear, err = db.readUint8(3)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.databaseMonth, err = db.readUint8(4)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.databaseDay, err = db.readUint8(5)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv4DatabaseCount, err = db.readUint32(6)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv4DatabaseAddr, err = db.readUint32(10)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv6DatabaseCount, err = db.readUint32(14)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv6DatabaseAddr, err = db.readUint32(18)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv4IndexBaseAddr, err = db.readUint32(22)
+	if err != nil {
+		return nil, err
+	}
+	db.meta.ipv6IndexBaseAddr, err = db.readUint32(26)
+	if err != nil {
+		return nil, err
+	}
 	db.meta.ipv4ColumnsSize = uint32(db.meta.databesColumn << 2)             // 4 bytes each column
 	db.meta.ipv6ColumnSize = uint32(16 + ((db.meta.databesColumn - 1) << 2)) // 4 bytes each column, except IPFrom column which is 16 bytes
 
@@ -307,42 +341,42 @@ func (db *DB) checkIP(ip string) (iptype uint32, ipnum *big.Int, ipindex uint32)
 }
 
 // read byte
-func (db *DB) readUint8(pos int64) uint8 {
+func (db *DB) readUint8(pos int64) (uint8, error) {
 	var retval uint8
 	data := make([]byte, 1)
 	_, err := db.file.ReadAt(data, pos-1)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return 0, err
 	}
 	retval = data[0]
-	return retval
+	return retval, nil
 }
 
 // read unsigned 32-bit integer
-func (db *DB) readUint32(pos uint32) uint32 {
+func (db *DB) readUint32(pos uint32) (uint32, error) {
 	pos2 := int64(pos)
 	var retval uint32
 	data := make([]byte, 4)
 	_, err := db.file.ReadAt(data, pos2-1)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return 0, err
 	}
 	buf := bytes.NewReader(data)
 	err = binary.Read(buf, binary.LittleEndian, &retval)
 	if err != nil {
-		fmt.Println("Binary read failed:", err)
+		return 0, err
 	}
-	return retval
+	return retval, nil
 }
 
 // read unsigned 128-bit integer
-func (db *DB) readUint128(pos uint32) *big.Int {
+func (db *DB) readUint128(pos uint32) (*big.Int, error) {
 	pos2 := int64(pos)
 	retval := big.NewInt(0)
 	data := make([]byte, 16)
 	_, err := db.file.ReadAt(data, pos2-1)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return nil, err
 	}
 
 	// little endian to big endian
@@ -350,185 +384,159 @@ func (db *DB) readUint128(pos uint32) *big.Int {
 		data[i], data[j] = data[j], data[i]
 	}
 	retval.SetBytes(data)
-	return retval
+	return retval, nil
 }
 
 // read string
-func (db *DB) readStr(pos uint32) string {
+func (db *DB) readStr(pos uint32) (string, error) {
 	pos2 := int64(pos)
 	var retval string
 	lenbyte := make([]byte, 1)
 	_, err := db.file.ReadAt(lenbyte, pos2)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return "", err
 	}
 	strlen := lenbyte[0]
 	data := make([]byte, strlen)
 	_, err = db.file.ReadAt(data, pos2+1)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return "", err
 	}
 	retval = string(data[:strlen])
-	return retval
+	return retval, nil
 }
 
 // read float
-func (db *DB) readFloat(pos uint32) float32 {
+func (db *DB) readFloat(pos uint32) (float32, error) {
 	pos2 := int64(pos)
 	var retval float32
 	data := make([]byte, 4)
 	_, err := db.file.ReadAt(data, pos2-1)
 	if err != nil {
-		fmt.Println("File read failed:", err)
+		return 0, err
 	}
 	buf := bytes.NewReader(data)
 	err = binary.Read(buf, binary.LittleEndian, &retval)
 	if err != nil {
-		fmt.Println("Binary read failed:", err)
+		return 0, err
 	}
-	return retval
-}
-
-// populate record with message
-func (db *DB) loadMessage(mesg string) Record {
-	var x Record
-
-	x.CountryShort = mesg
-	x.CountryLong = mesg
-	x.Region = mesg
-	x.City = mesg
-	x.Isp = mesg
-	x.Domain = mesg
-	x.Zipcode = mesg
-	x.TimeZone = mesg
-	x.NetSpeed = mesg
-	x.IddCode = mesg
-	x.Areacode = mesg
-	x.WeatherStationCode = mesg
-	x.WeatherStationName = mesg
-	x.Mcc = mesg
-	x.Mnc = mesg
-	x.MobileBrand = mesg
-	x.UsageType = mesg
-
-	return x
+	return retval, nil
 }
 
 // get all fields
-func (db *DB) GetAll(ipaddress string) Record {
+func (db *DB) GetAll(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, all)
 }
 
 // get country code
-func (db *DB) GetCountryShort(ipaddress string) Record {
+func (db *DB) GetCountryShort(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, countryshort)
 }
 
 // get country name
-func (db *DB) GetCountryLong(ipaddress string) Record {
+func (db *DB) GetCountryLong(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, countrylong)
 }
 
 // get region
-func (db *DB) GetRegion(ipaddress string) Record {
+func (db *DB) GetRegion(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, region)
 }
 
 // get city
-func (db *DB) GetCity(ipaddress string) Record {
+func (db *DB) GetCity(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, city)
 }
 
 // get isp
-func (db *DB) GetISP(ipaddress string) Record {
+func (db *DB) GetISP(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, isp)
 }
 
 // get latitude
-func (db *DB) GetLatitude(ipaddress string) Record {
+func (db *DB) GetLatitude(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, latitude)
 }
 
 // get longitude
-func (db *DB) GetLongitude(ipaddress string) Record {
+func (db *DB) GetLongitude(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, longitude)
 }
 
 // get domain
-func (db *DB) GetDomain(ipaddress string) Record {
+func (db *DB) GetDomain(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, domain)
 }
 
 // get zip code
-func (db *DB) GetZipCode(ipaddress string) Record {
+func (db *DB) GetZipCode(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, zipcode)
 }
 
 // get time zone
-func (db *DB) GetTimeZone(ipaddress string) Record {
+func (db *DB) GetTimeZone(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, timezone)
 }
 
 // get net speed
-func (db *DB) GetNetSpeed(ipaddress string) Record {
+func (db *DB) GetNetSpeed(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, netspeed)
 }
 
 // get idd code
-func (db *DB) GetIDDCode(ipaddress string) Record {
+func (db *DB) GetIDDCode(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, iddcode)
 }
 
 // get area code
-func (db *DB) GetAreaCode(ipaddress string) Record {
+func (db *DB) GetAreaCode(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, areacode)
 }
 
 // get weather station code
-func (db *DB) GetWeatherStationCode(ipaddress string) Record {
+func (db *DB) GetWeatherStationCode(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, weatherstationcode)
 }
 
 // get weather station name
-func (db *DB) GetWeatherStationName(ipaddress string) Record {
+func (db *DB) GetWeatherStationName(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, weatherstationname)
 }
 
 // get mobile country code
-func (db *DB) GetMCC(ipaddress string) Record {
+func (db *DB) GetMCC(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, mcc)
 }
 
 // get mobile network code
-func (db *DB) GetMNC(ipaddress string) Record {
+func (db *DB) GetMNC(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, mnc)
 }
 
 // get mobile carrier brand
-func (db *DB) GetMobileBrand(ipaddress string) Record {
+func (db *DB) GetMobileBrand(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, mobilebrand)
 }
 
 // get elevation
-func (db *DB) GetElevation(ipaddress string) Record {
+func (db *DB) GetElevation(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, elevation)
 }
 
 // get usage type
-func (db *DB) GetUsageType(ipaddress string) Record {
+func (db *DB) GetUsageType(ipaddress string) (*Record, error) {
 	return db.query(ipaddress, usagetype)
 }
 
 // main query
-func (db *DB) query(ipaddress string, mode uint32) Record {
-	x := db.loadMessage(not_supported) // default message
+func (db *DB) query(ipaddress string, mode uint32) (*Record, error) {
+	x := &Record{} // empty record
 
 	// check IP type and return IP number & index (if exists)
 	iptype, ipno, ipindex := db.checkIP(ipaddress)
 
 	if iptype == 0 {
-		x = db.loadMessage(invalid_address)
-		return x
+		return nil, ErrInvalidAddress
 	}
 
 	var colsize uint32
@@ -538,6 +546,7 @@ func (db *DB) query(ipaddress string, mode uint32) Record {
 	var mid uint32
 	var rowoffset uint32
 	var rowoffset2 uint32
+	var err error
 	ipfrom := big.NewInt(0)
 	ipto := big.NewInt(0)
 	maxip := big.NewInt(0)
@@ -556,8 +565,14 @@ func (db *DB) query(ipaddress string, mode uint32) Record {
 
 	// reading index
 	if ipindex > 0 {
-		low = db.readUint32(ipindex)
-		high = db.readUint32(ipindex + 4)
+		low, err = db.readUint32(ipindex)
+		if err != nil {
+			return nil, err
+		}
+		high, err = db.readUint32(ipindex + 4)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if ipno.Cmp(maxip) >= 0 {
@@ -570,11 +585,25 @@ func (db *DB) query(ipaddress string, mode uint32) Record {
 		rowoffset2 = rowoffset + colsize
 
 		if iptype == 4 {
-			ipfrom = big.NewInt(int64(db.readUint32(rowoffset)))
-			ipto = big.NewInt(int64(db.readUint32(rowoffset2)))
+			u32, err := db.readUint32(rowoffset)
+			if err != nil {
+				return nil, err
+			}
+			ipfrom = big.NewInt(int64(u32))
+			u32, err = db.readUint32(rowoffset2)
+			if err != nil {
+				return nil, err
+			}
+			ipto = big.NewInt(int64(u32))
 		} else {
-			ipfrom = db.readUint128(rowoffset)
-			ipto = db.readUint128(rowoffset2)
+			ipfrom, err = db.readUint128(rowoffset)
+			if err != nil {
+				return nil, err
+			}
+			ipto, err = db.readUint128(rowoffset2)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		if ipno.Cmp(ipfrom) >= 0 && ipno.Cmp(ipto) < 0 {
@@ -583,87 +612,214 @@ func (db *DB) query(ipaddress string, mode uint32) Record {
 			}
 
 			if mode&countryshort == 1 && db.countryEnabled {
-				x.CountryShort = db.readStr(db.readUint32(rowoffset + db.countryPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.countryPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.CountryShort, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&countrylong != 0 && db.countryEnabled {
-				x.CountryLong = db.readStr(db.readUint32(rowoffset+db.countryPositionOffset) + 3)
+				u32, err := db.readUint32(rowoffset + db.countryPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.CountryLong, err = db.readStr(u32 + 3)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&region != 0 && db.regionEnabled {
-				x.Region = db.readStr(db.readUint32(rowoffset + db.regionPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.regionPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Region, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&city != 0 && db.cityEnabled {
-				x.City = db.readStr(db.readUint32(rowoffset + db.cityPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.cityPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.City, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&isp != 0 && db.ispEnabled {
-				x.Isp = db.readStr(db.readUint32(rowoffset + db.ispPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.ispPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Isp, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&latitude != 0 && db.latitudeEnabled {
-				x.Latitude = db.readFloat(rowoffset + db.latitudePositionOffset)
+				x.Latitude, err = db.readFloat(rowoffset + db.latitudePositionOffset)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&longitude != 0 && db.longitudeEnabled {
-				x.Longitude = db.readFloat(rowoffset + db.longitudePositionOffset)
+				x.Longitude, err = db.readFloat(rowoffset + db.longitudePositionOffset)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&domain != 0 && db.domainEnabled {
-				x.Domain = db.readStr(db.readUint32(rowoffset + db.domainPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.domainPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Domain, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&zipcode != 0 && db.zipCodeEnabled {
-				x.Zipcode = db.readStr(db.readUint32(rowoffset + db.zipcodePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.zipcodePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Zipcode, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&timezone != 0 && db.timeZoneEnabled {
-				x.TimeZone = db.readStr(db.readUint32(rowoffset + db.timeZonePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.timeZonePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.TimeZone, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&netspeed != 0 && db.netSpeedEnabled {
-				x.NetSpeed = db.readStr(db.readUint32(rowoffset + db.netSpeedPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.netSpeedPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.NetSpeed, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&iddcode != 0 && db.iddCodeEnabled {
-				x.IddCode = db.readStr(db.readUint32(rowoffset + db.iddCodePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.iddCodePositionOffset)
+				x.IddCode, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&areacode != 0 && db.areaCodeEnabled {
-				x.Areacode = db.readStr(db.readUint32(rowoffset + db.areaCodePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.areaCodePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Areacode, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&weatherstationcode != 0 && db.weatherStationCodeEnabled {
-				x.WeatherStationCode = db.readStr(db.readUint32(rowoffset + db.weatherStationCodePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.weatherStationCodePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.WeatherStationCode, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&weatherstationname != 0 && db.weatherStationNameEnabled {
-				x.WeatherStationName = db.readStr(db.readUint32(rowoffset + db.weatherStationNamePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.weatherStationNamePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.WeatherStationName, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&mcc != 0 && db.mccEnabled {
-				x.Mcc = db.readStr(db.readUint32(rowoffset + db.mccPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.mccPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Mcc, err = db.readStr(u32)
 			}
 
 			if mode&mnc != 0 && db.mncEnabled {
-				x.Mnc = db.readStr(db.readUint32(rowoffset + db.mncPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.mncPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.Mnc, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&mobilebrand != 0 && db.mobileBrandEnabled {
-				x.MobileBrand = db.readStr(db.readUint32(rowoffset + db.mobileBrandPositionOffset))
+				u32, err := db.readUint32(rowoffset + db.mobileBrandPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.MobileBrand, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			if mode&elevation != 0 && db.elevationEnabled {
-				f, _ := strconv.ParseFloat(db.readStr(db.readUint32(rowoffset+db.elevationPositionOffset)), 32)
+				u32, err := db.readUint32(rowoffset + db.elevationPositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				str, err := db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
+				f, _ := strconv.ParseFloat(str, 32)
 				x.Elevation = float32(f)
 			}
 
 			if mode&usagetype != 0 && db.usageTypeEnabled {
-				x.UsageType = db.readStr(db.readUint32(rowoffset + db.usageTypePositionOffset))
+				u32, err := db.readUint32(rowoffset + db.usageTypePositionOffset)
+				if err != nil {
+					return nil, err
+				}
+				x.UsageType, err = db.readStr(u32)
+				if err != nil {
+					return nil, err
+				}
 			}
 
-			return x
+			return x, nil
 		} else {
 			if ipno.Cmp(ipfrom) < 0 {
 				high = mid - 1
@@ -672,7 +828,7 @@ func (db *DB) query(ipaddress string, mode uint32) Record {
 			}
 		}
 	}
-	return x
+	return x, nil
 }
 
 func (x Record) String() string {

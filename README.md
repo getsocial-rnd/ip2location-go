@@ -6,6 +6,7 @@ Compared to upstream, this fork has a number of changes we feel were necessary:
 
 - No global state.
 - Proper error handling (errors are not silently ignored).
+- No writing to stdout.
 - camelCase, instead of snake_case.
 - Basically, idiomatic Go (see example at the end).
 
